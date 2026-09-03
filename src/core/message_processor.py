@@ -75,7 +75,9 @@ class MessageProcessor:
                 return message_value[field]
             else:
                 time_obj = datetime.strptime(message_value[field], self.config.date_time_format)
-                return time_obj.timestamp()
+                # timestamp() is in seconds; every other timestamp in this tool
+                # is epoch milliseconds, so scale before it reaches the subtraction.
+                return time_obj.timestamp() * 1000
                 
         except Exception as e:
             logger.error(f"Error extracting time1: {str(e)}")

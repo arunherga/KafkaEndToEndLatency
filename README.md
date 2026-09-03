@@ -121,6 +121,15 @@ export DATE_TIME_FORMAT=epoch
 python main.py
 ```
 
+## Running the Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The suite runs entirely against fakes -- no broker or Schema Registry needed.
+
 ## Output
 
 The profiler can output results in two ways:

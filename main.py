@@ -1,4 +1,5 @@
 import time
+import random
 import logging
 import numpy as np
 from datetime import datetime
@@ -24,8 +25,18 @@ def process_results(processor: MessageProcessor, config) -> None:
     logger.info(f"Total Message read by consumer: {processor.count}")
     logger.info(f"Current Time: {date_string}")
     
+    if processor.count == 0:
+        logger.warning(
+            f"No messages with usable timestamps were read from topic '{config.input_topic}' "
+            f"during the {config.run_interval}s window, so there are no latency results to "
+            "report. Check INPUT_TOPIC, the consumer group offsets and that the topic is live."
+        )
+        return
+    
     if config.enable_sampling:
-        length = int(len(processor.latency_array) * 0.3)
+        # max(1, ...) so a run that captured only a couple of messages still
+        # yields a sample instead of dividing by zero.
+        length = max(1, int(len(processor.latency_array) * 0.3))
         random_elements = random.sample(processor.latency_array, length)
         avg = sum(random_elements) // len(random_elements)
         logger.info(f"Number of message sampled(sampling enabled): {len(random_elements)}")
@@ -49,11 +60,23 @@ def process_results(processor: MessageProcessor, config) -> None:
         output_to_file(config, avg, quantiles, date_string)
 
 def main():
+    consumer = None
+    config = None
+    processor = None
     try:
         config = create_kafka_config()
         processor = MessageProcessor(config)
         
-        consumer = Consumer(read_ccloud_config(config.consumer_config_file))
+        consumer_config = read_ccloud_config(config.consumer_config_file)
+        if config.group_id:
+            consumer_config['group.id'] = config.group_id
+        if not consumer_config.get('group.id'):
+            raise ValueError(
+                "No consumer group configured: set the GROUP_ID environment variable "
+                f"or add a group.id property to {config.consumer_config_file}"
+            )
+        
+        consumer = Consumer(consumer_config)
         consumer.subscribe([config.input_topic])
         
         logger.info("Consumer has started!")
@@ -72,10 +95,14 @@ def main():
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
     finally:
-        if 'consumer' in locals():
+        if consumer is not None:
             consumer.close()
-        if 'processor' in locals():
-            process_results(processor, config)
+        if processor is not None and config is not None:
+            # Never let a reporting failure mask the error that got us here.
+            try:
+                process_results(processor, config)
+            except Exception as e:
+                logger.error(f"Error reporting latency results: {str(e)}")
         logger.info("Consumer closing")
 
 if __name__ == '__main__':

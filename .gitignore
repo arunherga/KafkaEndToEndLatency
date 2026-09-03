@@ -1,0 +1,34 @@
+# Kafka / Schema Registry credentials.
+# arguments.env stays tracked as a placeholder template -- keep real
+# bootstrap.servers, sasl.username and sasl.password values in a separate
+# properties file and point CONSUMER_CONFIG_FILE at that instead.
+*.properties
+client.properties
+*.local.env
+.env
+
+# Profiler output
+data/
+logs/
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Tooling
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
