@@ -15,6 +15,7 @@ from confluent_kafka.schema_registry.json_schema import JSONDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
 
 from src.config.config_manager import KafkaConfig, read_sr_config
+from src.core.protobuf_schema import build_protobuf_deserializer
 from src.core.statistics import LatencyReport
 from src.core.timestamps import (
     TimestampError,
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 # Deserializers that take raw bytes of JSON, with no Schema Registry involved.
 PLAIN_JSON_DESERIALIZERS = ('StringDeserializer', 'JSONDeserializer')
 # Deserializers backed by Schema Registry.
-REGISTRY_DESERIALIZERS = ('AvroDeserializer', 'JSONSchemaDeserializer')
+REGISTRY_DESERIALIZERS = ('AvroDeserializer', 'JSONSchemaDeserializer', 'ProtobufDeserializer')
 
 TIMESTAMP_TYPE_NAMES = {
     TIMESTAMP_NOT_AVAILABLE: 'not available',
@@ -87,7 +88,17 @@ class MessageProcessor:
         schema = self.schema_registry.get_schema(
             self.schema_registry.get_latest_version(subject).schema_id
         )
-        return JSONDeserializer(schema_str=schema.schema_str)
+
+        if name == 'JSONSchemaDeserializer':
+            return JSONDeserializer(schema_str=schema.schema_str)
+
+        # Protobuf needs packages that are an optional install, so everything
+        # it touches lives behind this call.
+        return build_protobuf_deserializer(
+            schema,
+            schema_registry_client=self.schema_registry,
+            message_name=self.config.protobuf_message_name,
+        )
 
     # -- per message -------------------------------------------------------
 

@@ -1,0 +1,14 @@
+# Optional: only needed for VALUE_DESERIALIZER/KEY_DESERIALIZER=ProtobufDeserializer.
+#
+# Kept out of requirements.txt because grpcio-tools pulls in grpcio, roughly
+# 19 MiB, and most users do not need it. Everything protobuf-specific is
+# imported lazily, so the tool runs normally without these installed and only
+# complains if a protobuf deserializer is actually configured.
+#
+#   pip install -r requirements-protobuf.txt
+#
+# grpcio-tools supplies protoc, used to compile the .proto schema fetched from
+# Schema Registry at runtime -- no pre-generated _pb2.py files required.
+-r requirements.txt
+confluent-kafka[protobuf]==2.15.0
+grpcio-tools==1.83.1
