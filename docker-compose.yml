@@ -21,4 +21,6 @@ services:
       - VALUE_DESERIALIZER=StringDeserializer
       - KEY_DESERIALIZER=StringDeserializer
       - DATE_TIME_FORMAT=epoch
+      - T1_UNIT=ms
+      - T1_TIMEZONE=utc
     restart: unless-stopped

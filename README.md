@@ -78,6 +78,8 @@ environment:
   - VALUE_DESERIALIZER=StringDeserializer
   - KEY_DESERIALIZER=StringDeserializer
   - DATE_TIME_FORMAT=epoch
+  - T1_UNIT=ms
+  - T1_TIMEZONE=utc
 ```
 
 ## Running the Application
@@ -116,6 +118,8 @@ export RESULT_DUMP_LOCAL_FILEPATH=latency_results.csv
 export VALUE_DESERIALIZER=StringDeserializer
 export KEY_DESERIALIZER=StringDeserializer
 export DATE_TIME_FORMAT=epoch
+export T1_UNIT=ms
+export T1_TIMEZONE=utc
 ```
 
 2. Run the application:
@@ -140,6 +144,43 @@ ruff check .
 ```
 
 Both run on every pull request via GitHub Actions.
+
+## What Is Actually Being Measured
+
+`T1` and `T2` are normally read from **different clocks**, so a latency is only as
+trustworthy as the sync between them:
+
+| Setting | Clock |
+|---|---|
+| `T1=IngestionTime` | The broker's record of the message timestamp |
+| `T1=value.<field>` / `T1=key.<field>` | Whatever host wrote that field, usually the producer |
+| `T2=consumerWallClockTime` | The consumer host running this tool |
+| `T2=IngestionTime` | The broker |
+
+Keep every host NTP-synced. The profiler counts latencies that come out negative
+and warns about them at the end of a run, since that is the clearest signal that
+two clocks disagree.
+
+Two further caveats:
+
+- `T1=IngestionTime` reads `message.timestamp.type` as configured on the topic.
+  That is `CreateTime` (the **producer's** clock) unless the topic sets
+  `LogAppendTime` (the **broker's**). The run logs which one it observed.
+- `T2=consumerWallClockTime` is captured the moment `poll()` returns, before any
+  deserialization, so decoding cost is not counted as latency.
+
+### Timestamp units and timezones
+
+An epoch field carries no unit, so `T1_UNIT` supplies it (`s`, `ms`, `us`, `ns`;
+default `ms`). Getting this wrong is a silent 1000x error, not a crash.
+
+When `DATE_TIME_FORMAT` is a strptime pattern rather than `epoch`, the parsed
+value usually has no timezone. `T1_TIMEZONE` decides how to read it -- `utc`
+(default) or `local`. Without this the same message yields different latencies
+depending on the consumer host's `TZ`.
+
+`T1` accepts nested paths (`value.header.produced_at`) and reads from the message
+key as well as the value (`key.produced_at`).
 
 ## Output
 
