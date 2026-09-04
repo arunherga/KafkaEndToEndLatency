@@ -1,5 +1,7 @@
 # Kafka Latency Profiler
 
+[![CI](https://github.com/arunherga/KafkaEndToEndLatency/actions/workflows/ci.yml/badge.svg)](https://github.com/arunherga/KafkaEndToEndLatency/actions/workflows/ci.yml)
+
 A tool for measuring and analyzing message latency in Kafka topics. This profiler can measure latency between different timestamps in Kafka messages and output the results to either a Kafka topic or a local file.
 
 ## Features
@@ -129,6 +131,15 @@ pytest
 ```
 
 The suite runs entirely against fakes -- no broker or Schema Registry needed.
+
+Linting uses [ruff](https://docs.astral.sh/ruff/), configured in `pyproject.toml`:
+
+```bash
+pip install ruff==0.8.6
+ruff check .
+```
+
+Both run on every pull request via GitHub Actions.
 
 ## Output
 

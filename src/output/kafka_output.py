@@ -1,9 +1,9 @@
 import logging
-from datetime import datetime
+
 from confluent_kafka import Producer
 from confluent_kafka.schema_registry import SchemaRegistryClient
 from confluent_kafka.schema_registry.avro import AvroSerializer
-from confluent_kafka.serialization import SerializationContext, MessageField, StringSerializer
+from confluent_kafka.serialization import MessageField, SerializationContext, StringSerializer
 
 from src.config.config_manager import KafkaConfig, read_ccloud_config, read_sr_config
 
@@ -27,7 +27,7 @@ def output_to_kafka(config: KafkaConfig, avg: float, quantiles: list, date_strin
         ]
     }
     """
-    
+
     result = {
         "average": int(avg),
         "percentile50": int(quantiles[0]),
@@ -37,16 +37,19 @@ def output_to_kafka(config: KafkaConfig, avg: float, quantiles: list, date_strin
         "percentile999": int(quantiles[4]),
         "Date_Time": date_string
     }
-    
+
     try:
         schema_registry_client = SchemaRegistryClient(read_sr_config(config.producer_config_file))
         avro_serializer = AvroSerializer(schema_registry_client, schema_string)
         string_serializer = StringSerializer('utf_8')
-        
+
         producer = Producer(read_ccloud_config(config.producer_config_file))
         producer.produce(
             topic=config.output_topic,
-            key=string_serializer(f"Topic:{config.input_topic},consumer group id:{config.group_id},Date Time:{date_string}"),
+            key=string_serializer(
+                f"Topic:{config.input_topic},consumer group id:{config.group_id},"
+                f"Date Time:{date_string}"
+            ),
             value=avro_serializer(result, SerializationContext(config.output_topic, MessageField.VALUE)),
             on_delivery=delivery_report
         )
@@ -61,4 +64,4 @@ def delivery_report(err, msg):
     if err is not None:
         logger.error(f"Delivery failed for message {msg.key()}: {err}")
     else:
-        logger.info(f"Message delivered to {msg.topic()} Partition[{msg.partition()}] at offset {msg.offset()}") 
+        logger.info(f"Message delivered to {msg.topic()} Partition[{msg.partition()}] at offset {msg.offset()}")

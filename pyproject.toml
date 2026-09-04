@@ -1,0 +1,29 @@
+# Tool configuration only -- this project is run as a script, not installed as
+# a package, so there is deliberately no [project] table here.
+
+[tool.ruff]
+line-length = 120
+# Matches the python:3.9-slim base image in the Dockerfile. The pins in
+# requirements.txt cap the usable range at 3.11.
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes -- undefined names, unused imports
+    "W",   # pycodestyle warnings
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into private helpers on purpose to pin down behaviour.
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Puts the project root on sys.path so tests can `import main` and `from src...`
+# no matter which directory pytest is invoked from.
+pythonpath = ["."]
+addopts = "-q"

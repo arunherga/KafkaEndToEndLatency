@@ -1,9 +1,16 @@
-import os
-from typing import Optional
-from dataclasses import dataclass
 import logging
+import os
+from dataclasses import dataclass
+from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+VALID_DESERIALIZERS = [
+    'AvroDeserializer',
+    'JSONDeserializer',
+    'StringDeserializer',
+    'JSONSchemaDeserializer',
+]
 
 @dataclass
 class KafkaConfig:
@@ -24,29 +31,41 @@ class KafkaConfig:
 
 def validate_config(config: KafkaConfig) -> None:
     """Validate the configuration parameters."""
-    if config.value_deserializer not in ['AvroDeserializer', 'JSONDeserializer', 'StringDeserializer', 'JSONSchemaDeserializer']:
-        raise ValueError('Invalid input for VALUE_DESERIALIZER must be among AvroDeserializer,JSONDeserializer,StringDeserializer,JSONSchemaDeserializer')
-    
-    if config.key_deserializer not in ['AvroDeserializer', 'JSONDeserializer', 'StringDeserializer', 'JSONSchemaDeserializer']:
-        raise ValueError('Invalid input for KEY_DESERIALIZER must be among AvroDeserializer,JSONDeserializer,StringDeserializer,JSONSchemaDeserializer')
-    
+    if config.value_deserializer not in VALID_DESERIALIZERS:
+        raise ValueError(
+            'Invalid input for VALUE_DESERIALIZER must be among '
+            'AvroDeserializer,JSONDeserializer,StringDeserializer,JSONSchemaDeserializer'
+        )
+
+    if config.key_deserializer not in VALID_DESERIALIZERS:
+        raise ValueError(
+            'Invalid input for KEY_DESERIALIZER must be among '
+            'AvroDeserializer,JSONDeserializer,StringDeserializer,JSONSchemaDeserializer'
+        )
+
     if config.t1 != "IngestionTime" and not (config.t1.startswith('key.') or config.t1.startswith('value.')):
         raise ValueError('Invalid input for T1 must be among IngestionTime or value.column name or key.column name')
-    
+
     if config.t2 not in ['IngestionTime', 'consumerWallClockTime']:
         raise ValueError("Invalid input for T2 must be one of IngestionTime, consumerWallClockTime")
-    
+
     if config.t1 == config.t2 == 'IngestionTime':
         raise ValueError("Both T1 and T2 cannot be IngestionTime")
-    
+
     if config.output_type == 'dumpToTopic':
         if not config.producer_config_file:
-            raise ValueError("To store latency measured to kafka topic must provide producer configuration file path to PRODUCER_CONFIG_FILE")
+            raise ValueError(
+                "To store latency measured to kafka topic must provide producer "
+                "configuration file path to PRODUCER_CONFIG_FILE"
+            )
         if not config.output_topic:
             raise ValueError("To store latency measured to kafka topic, topic name must be provided in OUTPUT_TOPIC")
-    
+
     if config.output_type == 'localFileDump' and not config.local_filepath:
-        raise ValueError("To store latency measured to local file, file path must be provided in RESULT_DUMP_LOCAL_FILEPATH")
+        raise ValueError(
+            "To store latency measured to local file, file path must be provided in "
+            "RESULT_DUMP_LOCAL_FILEPATH"
+        )
 
 def create_kafka_config() -> KafkaConfig:
     """Create and validate Kafka configuration from environment variables."""
@@ -103,4 +122,4 @@ def read_sr_config(config_file: str) -> dict:
         }
     except Exception as e:
         logger.error(f"Error reading schema registry config file {config_file}: {str(e)}")
-        raise 
+        raise

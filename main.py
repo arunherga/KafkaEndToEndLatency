@@ -1,14 +1,15 @@
-import time
-import random
 import logging
-import numpy as np
+import random
+import time
 from datetime import datetime
+
+import numpy as np
 from confluent_kafka import Consumer
 
 from src.config.config_manager import create_kafka_config, read_ccloud_config
 from src.core.message_processor import MessageProcessor
-from src.output.kafka_output import output_to_kafka
 from src.output.file_output import output_to_file
+from src.output.kafka_output import output_to_kafka
 
 # Configure logging
 logging.basicConfig(
@@ -21,10 +22,10 @@ def process_results(processor: MessageProcessor, config) -> None:
     """Process and output the latency results."""
     n = datetime.now()
     date_string = n.strftime("%Y-%m-%d %H:%M:%S.%f")
-    
+
     logger.info(f"Total Message read by consumer: {processor.count}")
     logger.info(f"Current Time: {date_string}")
-    
+
     if processor.count == 0:
         logger.warning(
             f"No messages with usable timestamps were read from topic '{config.input_topic}' "
@@ -32,7 +33,7 @@ def process_results(processor: MessageProcessor, config) -> None:
             "report. Check INPUT_TOPIC, the consumer group offsets and that the topic is live."
         )
         return
-    
+
     if config.enable_sampling:
         # max(1, ...) so a run that captured only a couple of messages still
         # yields a sample instead of dividing by zero.
@@ -43,9 +44,9 @@ def process_results(processor: MessageProcessor, config) -> None:
     else:
         avg = sum(processor.latency_array) // processor.count
         logger.info(f"Number of messages sampled(sampling disabled): {processor.count}")
-    
+
     logger.info(f"Average Latency in ms: {avg}")
-    
+
     quantiles = np.quantile(processor.latency_array, [.5, .9, .95, .99, .999])
     logger.info("\nQuantiles of the latencies measured in ms:")
     logger.info(f"50th percentile: {quantiles[0]}")
@@ -53,7 +54,7 @@ def process_results(processor: MessageProcessor, config) -> None:
     logger.info(f"95th percentile: {quantiles[2]}")
     logger.info(f"99th percentile: {quantiles[3]}")
     logger.info(f"99.9th percentile: {quantiles[4]}")
-    
+
     if config.output_type == 'dumpToTopic':
         output_to_kafka(config, avg, quantiles, date_string)
     elif config.output_type == 'localFileDump':
@@ -66,7 +67,7 @@ def main():
     try:
         config = create_kafka_config()
         processor = MessageProcessor(config)
-        
+
         consumer_config = read_ccloud_config(config.consumer_config_file)
         if config.group_id:
             consumer_config['group.id'] = config.group_id
@@ -75,21 +76,21 @@ def main():
                 "No consumer group configured: set the GROUP_ID environment variable "
                 f"or add a group.id property to {config.consumer_config_file}"
             )
-        
+
         consumer = Consumer(consumer_config)
         consumer.subscribe([config.input_topic])
-        
+
         logger.info("Consumer has started!")
-        
+
         start_time = time.time()
         elapsed_time = 0
-        
+
         while elapsed_time < config.run_interval:
             msg = consumer.poll(1.0)
             if msg is not None:
                 processor.process_message(msg)
             elapsed_time = time.time() - start_time
-            
+
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt, shutting down...")
     except Exception as e:
@@ -106,4 +107,4 @@ def main():
         logger.info("Consumer closing")
 
 if __name__ == '__main__':
-    main() 
+    main()
