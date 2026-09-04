@@ -15,6 +15,7 @@ from confluent_kafka.schema_registry.json_schema import JSONDeserializer
 from confluent_kafka.serialization import MessageField, SerializationContext
 
 from src.config.config_manager import KafkaConfig, read_sr_config
+from src.core.statistics import LatencyReport
 from src.core.timestamps import (
     TimestampError,
     extract_field,
@@ -39,7 +40,8 @@ TIMESTAMP_TYPE_NAMES = {
 class MessageProcessor:
     def __init__(self, config: KafkaConfig):
         self.config = config
-        self.latency_array = []
+        # Fixed-memory statistics: no per-message list to outgrow the heap.
+        self.stats = LatencyReport()
         self.count = 0
 
         # A run that silently drops most of its messages should say so, rather
@@ -114,13 +116,17 @@ class MessageProcessor:
                 return None
 
             latency = time2 - time1
+            self.count += 1
+
             if latency < 0:
                 # Almost always clock skew between the two hosts rather than a
-                # real negative latency. Kept in the sample, but counted.
+                # real negative latency. Counted and reported, but kept out of
+                # the percentiles: a histogram cannot hold it, and a latency
+                # that claims to precede its own cause is not a measurement.
                 self.negative_latencies += 1
+            else:
+                self.stats.record(latency, msg.partition())
 
-            self.latency_array.append(latency)
-            self.count += 1
             return latency
 
         except Exception as e:

@@ -21,21 +21,12 @@ from src.core.message_processor import MessageProcessor
 # process_results
 # --------------------------------------------------------------------------
 
-def test_sampling_enabled_reports_results(caplog, make_config, make_processor):
-    """ENABLE_SAMPLING=True is the shipped default; it used to raise NameError."""
+def test_a_very_short_run_does_not_divide_by_zero(caplog, make_config, make_processor):
+    """Three messages used to be enough to hit a ZeroDivisionError under sampling."""
     with caplog.at_level("INFO"):
-        main.process_results(make_processor(range(100)), make_config(enable_sampling=True))
+        main.process_results(make_processor([10, 20, 30]), make_config())
 
-    assert "Average Latency in ms" in caplog.text
-    assert "Number of message sampled(sampling enabled): 30" in caplog.text
-
-
-def test_sampling_on_a_very_short_run_does_not_divide_by_zero(caplog, make_config, make_processor):
-    """3 messages * 0.3 rounds down to a sample of 0, which used to be a ZeroDivisionError."""
-    with caplog.at_level("INFO"):
-        main.process_results(make_processor([10, 20, 30]), make_config(enable_sampling=True))
-
-    assert "Average Latency in ms" in caplog.text
+    assert "Latency over 3 messages" in caplog.text
 
 
 def test_no_messages_warns_instead_of_crashing(caplog, make_config, make_processor):
@@ -47,11 +38,13 @@ def test_no_messages_warns_instead_of_crashing(caplog, make_config, make_process
     assert "test-topic" in caplog.text
 
 
-def test_results_are_still_computed_without_sampling(caplog, make_config, make_processor):
+def test_results_are_computed_and_logged(caplog, make_config, make_processor):
     with caplog.at_level("INFO"):
         main.process_results(make_processor([100, 200, 300]), make_config())
 
-    assert "Average Latency in ms: 200" in caplog.text
+    assert "mean=200.0" in caplog.text
+    assert "min=100.0" in caplog.text
+    assert "max=300.0" in caplog.text
 
 
 def test_diagnostics_are_reported_even_on_an_empty_run(make_config, make_processor):
@@ -77,7 +70,6 @@ ENV = {
     "VALUE_DESERIALIZER": "StringDeserializer",
     "KEY_DESERIALIZER": "StringDeserializer",
     "DATE_TIME_FORMAT": "epoch",
-    "ENABLE_SAMPLING": "False",
 }
 
 

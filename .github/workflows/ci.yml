@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install ruff
-        run: pip install ruff==0.8.6
+        run: pip install ruff==0.8.6  # keep in step with requirements-dev.txt
 
       - name: Lint
         run: ruff check --output-format=github .
@@ -35,10 +35,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The pins in requirements.txt (numpy 1.24.2, pandas 1.5.3,
-        # confluent-kafka 2.0.2) have no wheels beyond 3.11, so that is the
-        # current upper bound despite the README claiming "3.9 or higher".
-        python-version: ["3.9", "3.11"]
+        # confluent-kafka 2.15 ships wheels for cp38-cp314; 3.9 is the floor
+        # this project documents and 3.13 the current stable release.
+        python-version: ["3.9", "3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -55,3 +54,39 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t kafka-latency-profiler:ci .
+
+      - name: It runs as a non-root user
+        run: |
+          uid=$(docker run --rm kafka-latency-profiler:ci id -u)
+          test "$uid" = "10001" || { echo "expected uid 10001, got $uid"; exit 1; }
+
+      - name: No build toolchain is left in the image
+        run: |
+          if docker run --rm kafka-latency-profiler:ci sh -c 'command -v gcc' ; then
+            echo "gcc should not be present: confluent-kafka ships manylinux wheels"
+            exit 1
+          fi
+
+      - name: Credentials are not baked into the image
+        run: |
+          if docker run --rm kafka-latency-profiler:ci sh -c 'ls /app/arguments.env' 2>/dev/null ; then
+            echo "arguments.env must not be copied into the image"
+            exit 1
+          fi
+
+      - name: The application imports and reports missing configuration
+        run: |
+          docker run --rm kafka-latency-profiler:ci python -c 'import main'
+          output=$(docker run --rm kafka-latency-profiler:ci python main.py 2>&1) && status=0 || status=$?
+          echo "$output"
+          test "$status" = "1" || { echo "expected exit 1 on missing config, got $status"; exit 1; }
+          echo "$output" | grep -q "CONSUMER_CONFIG_FILE is required"

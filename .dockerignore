@@ -1,0 +1,21 @@
+# Keep credentials, history and test scaffolding out of the image.
+.git
+.github
+.gitignore
+tests
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+data
+logs
+*.csv
+arguments.env
+*.properties
+README.md
+LICENSE
+docker-compose.yml
+Dockerfile

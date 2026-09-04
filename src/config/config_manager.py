@@ -36,7 +36,6 @@ class KafkaConfig:
     producer_config_file: Optional[str]
     input_topic: str
     group_id: str
-    enable_sampling: bool
     run_interval: int
     t1: str
     t2: str
@@ -112,12 +111,19 @@ def validate_config(config: KafkaConfig) -> None:
 
 def create_kafka_config() -> KafkaConfig:
     """Create and validate Kafka configuration from environment variables."""
+    if os.getenv("ENABLE_SAMPLING") is not None:
+        logger.warning(
+            "ENABLE_SAMPLING is no longer supported and is being ignored. It never reduced "
+            "memory (it sampled the list after it was already built) and it applied only to "
+            "the mean, so the mean and the percentiles described different populations. "
+            "Percentiles now come from a fixed-memory histogram over every message."
+        )
+
     config = KafkaConfig(
         consumer_config_file=os.getenv("CONSUMER_CONFIG_FILE"),
         producer_config_file=os.getenv("PRODUCER_CONFIG_FILE"),
         input_topic=os.getenv("INPUT_TOPIC"),
         group_id=os.getenv("GROUP_ID"),
-        enable_sampling=os.getenv("ENABLE_SAMPLING") == 'True',
         run_interval=int(os.getenv("RUN_INTERVAL", "0")),
         t1=os.getenv("T1"),
         t2=os.getenv("T2"),

@@ -1,9 +1,9 @@
 import logging
-import random
+import signal
+import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
-import numpy as np
 from confluent_kafka import Consumer
 
 from src.config.config_manager import create_kafka_config, read_ccloud_config
@@ -18,54 +18,105 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def process_results(processor: MessageProcessor, config) -> None:
-    """Process and output the latency results."""
-    n = datetime.now()
-    date_string = n.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+class ShutdownRequest:
+    """Set when the process is asked to stop, so the window can end cleanly.
+
+    Without this, `docker stop` / `docker-compose down` sends SIGTERM, the
+    default handler terminates the process outright, the finally block never
+    runs, and the whole window's measurements are lost.
+    """
+
+    def __init__(self):
+        self.requested = False
+
+    def request(self, signum, _frame=None) -> None:
+        name = signal.Signals(signum).name
+        logger.info(f"Received {name}, ending the window and reporting what was measured...")
+        self.requested = True
+
+
+def install_signal_handlers(shutdown: ShutdownRequest) -> None:
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, shutdown.request)
+        except (ValueError, OSError, AttributeError):
+            # Not the main thread, or the platform does not have this signal.
+            logger.debug(f"Could not install a handler for {sig}")
+
+
+def log_results(rows: list) -> None:
+    """Log the aggregate figures, then the per-partition breakdown."""
+    overall = rows[-1]
+    logger.info(
+        f"Latency over {overall['count']} messages (ms): "
+        f"min={overall['min_ms']:.1f} mean={overall['mean_ms']:.1f} "
+        f"max={overall['max_ms']:.1f} stddev={overall['stddev_ms']:.1f}"
+    )
+    logger.info(
+        f"  p50={overall['p50_ms']:.1f} p90={overall['p90_ms']:.1f} "
+        f"p95={overall['p95_ms']:.1f} p99={overall['p99_ms']:.1f} "
+        f"p99.9={overall['p999_ms']:.1f}"
+    )
+
+    partitions = rows[:-1]
+    if len(partitions) > 1:
+        # One slow partition is invisible in a single topic-wide p99.
+        logger.info("Per-partition latency (ms):")
+        for row in partitions:
+            logger.info(
+                f"  partition {row['partition']}: n={row['count']} "
+                f"p50={row['p50_ms']:.1f} p99={row['p99_ms']:.1f} max={row['max_ms']:.1f}"
+            )
+
+def process_results(processor: MessageProcessor, config, window_seconds=None) -> None:
+    """Report and output the latency results."""
+    date_string = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
 
     logger.info(f"Current Time: {date_string}")
     # Report coverage and clock-skew diagnostics before any numbers, including
     # on an empty run -- that is exactly when they explain what went wrong.
     processor.log_diagnostics()
 
-    if processor.count == 0:
-        logger.warning(
-            f"No messages with usable timestamps were read from topic '{config.input_topic}' "
-            f"during the {config.run_interval}s window, so there are no latency results to "
-            "report. Check INPUT_TOPIC, the consumer group offsets and that the topic is live."
-        )
+    if processor.stats.count == 0:
+        if processor.negative_latencies:
+            logger.warning(
+                f"All {processor.negative_latencies} measured latencies were negative, so there "
+                "is nothing to report. T1 and T2 come from different hosts; check their clocks."
+            )
+        else:
+            logger.warning(
+                f"No messages with usable timestamps were read from topic '{config.input_topic}' "
+                f"during the {config.run_interval}s window, so there are no latency results to "
+                "report. Check INPUT_TOPIC, the consumer group offsets and that the topic is live."
+            )
         return
 
-    if config.enable_sampling:
-        # max(1, ...) so a run that captured only a couple of messages still
-        # yields a sample instead of dividing by zero.
-        length = max(1, int(len(processor.latency_array) * 0.3))
-        random_elements = random.sample(processor.latency_array, length)
-        avg = sum(random_elements) // len(random_elements)
-        logger.info(f"Number of message sampled(sampling enabled): {len(random_elements)}")
-    else:
-        avg = sum(processor.latency_array) // processor.count
-        logger.info(f"Number of messages sampled(sampling disabled): {processor.count}")
-
-    logger.info(f"Average Latency in ms: {avg}")
-
-    quantiles = np.quantile(processor.latency_array, [.5, .9, .95, .99, .999])
-    logger.info("\nQuantiles of the latencies measured in ms:")
-    logger.info(f"50th percentile: {quantiles[0]}")
-    logger.info(f"90th percentile: {quantiles[1]}")
-    logger.info(f"95th percentile: {quantiles[2]}")
-    logger.info(f"99th percentile: {quantiles[3]}")
-    logger.info(f"99.9th percentile: {quantiles[4]}")
+    context = {
+        'date_time': date_string,
+        'topic': config.input_topic,
+        'group_id': config.group_id,
+        'skipped': processor.skipped_total,
+        'negative_latencies': processor.negative_latencies,
+        'window_seconds': round(window_seconds, 3) if window_seconds is not None else None,
+    }
+    rows = processor.stats.rows(context)
+    log_results(rows)
 
     if config.output_type == 'dumpToTopic':
-        output_to_kafka(config, avg, quantiles, date_string)
+        output_to_kafka(config, rows)
     elif config.output_type == 'localFileDump':
-        output_to_file(config, avg, quantiles, date_string)
+        output_to_file(config, rows)
 
-def main():
+def main() -> int:
+    """Run one measurement window. Returns a process exit code."""
+    exit_code = 0
     consumer = None
     config = None
     processor = None
+    window_seconds = None
+    shutdown = ShutdownRequest()
+    install_signal_handlers(shutdown)
     try:
         config = create_kafka_config()
         processor = MessageProcessor(config)
@@ -87,26 +138,33 @@ def main():
         start_time = time.time()
         elapsed_time = 0
 
-        while elapsed_time < config.run_interval:
+        while elapsed_time < config.run_interval and not shutdown.requested:
             msg = consumer.poll(1.0)
             if msg is not None:
                 processor.process_message(msg)
             elapsed_time = time.time() - start_time
 
+        window_seconds = elapsed_time
+
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt, shutting down...")
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
+        # Exit non-zero so `restart: on-failure` and CI can tell a failed run
+        # from a completed one. This used to always exit 0.
+        exit_code = 1
     finally:
         if consumer is not None:
             consumer.close()
         if processor is not None and config is not None:
             # Never let a reporting failure mask the error that got us here.
             try:
-                process_results(processor, config)
+                process_results(processor, config, window_seconds)
             except Exception as e:
                 logger.error(f"Error reporting latency results: {str(e)}")
         logger.info("Consumer closing")
 
+    return exit_code
+
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
