@@ -1,4 +1,6 @@
 import logging
+import signal
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -15,6 +17,33 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+class ShutdownRequest:
+    """Set when the process is asked to stop, so the window can end cleanly.
+
+    Without this, `docker stop` / `docker-compose down` sends SIGTERM, the
+    default handler terminates the process outright, the finally block never
+    runs, and the whole window's measurements are lost.
+    """
+
+    def __init__(self):
+        self.requested = False
+
+    def request(self, signum, _frame=None) -> None:
+        name = signal.Signals(signum).name
+        logger.info(f"Received {name}, ending the window and reporting what was measured...")
+        self.requested = True
+
+
+def install_signal_handlers(shutdown: ShutdownRequest) -> None:
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, shutdown.request)
+        except (ValueError, OSError, AttributeError):
+            # Not the main thread, or the platform does not have this signal.
+            logger.debug(f"Could not install a handler for {sig}")
+
 
 def log_results(rows: list) -> None:
     """Log the aggregate figures, then the per-partition breakdown."""
@@ -79,11 +108,15 @@ def process_results(processor: MessageProcessor, config, window_seconds=None) ->
     elif config.output_type == 'localFileDump':
         output_to_file(config, rows)
 
-def main():
+def main() -> int:
+    """Run one measurement window. Returns a process exit code."""
+    exit_code = 0
     consumer = None
     config = None
     processor = None
     window_seconds = None
+    shutdown = ShutdownRequest()
+    install_signal_handlers(shutdown)
     try:
         config = create_kafka_config()
         processor = MessageProcessor(config)
@@ -105,7 +138,7 @@ def main():
         start_time = time.time()
         elapsed_time = 0
 
-        while elapsed_time < config.run_interval:
+        while elapsed_time < config.run_interval and not shutdown.requested:
             msg = consumer.poll(1.0)
             if msg is not None:
                 processor.process_message(msg)
@@ -117,6 +150,9 @@ def main():
         logger.info("Received keyboard interrupt, shutting down...")
     except Exception as e:
         logger.error(f"Error occurred: {str(e)}")
+        # Exit non-zero so `restart: on-failure` and CI can tell a failed run
+        # from a completed one. This used to always exit 0.
+        exit_code = 1
     finally:
         if consumer is not None:
             consumer.close()
@@ -128,5 +164,7 @@ def main():
                 logger.error(f"Error reporting latency results: {str(e)}")
         logger.info("Consumer closing")
 
+    return exit_code
+
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

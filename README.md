@@ -7,31 +7,44 @@ A tool for measuring and analyzing message latency in Kafka topics. This profile
 ## Features
 
 - Measure latency between different timestamps in Kafka messages
-- Support for various deserializers (Avro, JSON, String)
-- Configurable sampling
-- Output results to Kafka topic or local file
+- Support for various deserializers (Avro, JSON Schema, JSON, String)
+- Per-partition breakdown as well as topic-wide figures
+- Fixed-memory percentiles, so a busy topic cannot exhaust the heap
+- Output results to a Kafka topic or a local CSV
 - Docker support for easy deployment
 
 ## Project Structure
 
 ```
-kafka-latency-profiler/
+KafkaEndToEndLatency/
 ├── src/
-│   ├── config/         # Configuration management
-│   ├── core/          # Core message processing logic
-│   └── output/        # Output handlers (Kafka and file)
-├── data/              # Output data directory
-├── logs/              # Log files directory
-├── main.py           # Application entry point
-├── requirements.txt   # Python dependencies
-├── Dockerfile        # Docker configuration
-├── docker-compose.yml # Docker Compose configuration
-└── arguments.env     # Kafka configuration
+│   ├── config/               # Configuration management
+│   ├── core/                 # Message processing, timestamps, histogram, stats
+│   └── output/               # Output handlers (Kafka and file)
+├── tests/                    # Test suite; needs no broker
+├── main.py                   # Application entry point
+├── requirements.txt          # Runtime dependency
+├── requirements-dev.txt      # Test and lint tooling
+├── pyproject.toml            # ruff and pytest configuration
+├── Dockerfile                # Docker configuration
+├── docker-compose.yml        # Docker Compose configuration
+├── client.properties.example # Kafka connection settings (template)
+└── arguments.env             # Application settings (template)
 ```
+
+Two configuration files, deliberately:
+
+| File | Format | Holds |
+|---|---|---|
+| `client.properties` | java properties | Kafka connection: `bootstrap.servers`, SASL, Schema Registry. Passed straight to librdkafka. **Gitignored** -- this is where credentials go. |
+| `arguments.env` | environment variables | Application settings: `INPUT_TOPIC`, `T1`, `T2`, ... Tracked as a template. |
+
+They are not interchangeable. librdkafka rejects `INPUT_TOPIC` as an unknown
+property, so pointing `CONSUMER_CONFIG_FILE` at the wrong one fails at startup.
 
 ## Prerequisites
 
-- Python 3.9 or higher
+- Python 3.9 or higher (CI covers 3.9, 3.11 and 3.13)
 - Docker and Docker Compose (for containerized deployment)
 - Kafka cluster access
 - Schema Registry (if using Avro or JSON Schema)
@@ -51,22 +64,30 @@ pip install -r requirements.txt
 
 ## Configuration
 
-1. Configure Kafka settings in `arguments.env`:
+1. Copy the Kafka connection template and fill it in. `client.properties` is
+   gitignored, so credentials stay out of the repository:
+```bash
+cp client.properties.example client.properties
+```
 ```
 bootstrap.servers=your-kafka-broker:9092
-security.protocol=PLAINTEXT
+security.protocol=SASL_SSL
 sasl.mechanisms=PLAIN
 sasl.username=your-username
 sasl.password=your-password
+group.id=kafka-latency-profiler
+auto.offset.reset=latest
+
+# Only for AvroDeserializer / JSONSchemaDeserializer
 schema.registry.url=your-schema-registry-url
 basic.auth.user.info=your-schema-registry-credentials
 ```
 
-2. Configure environment variables in `docker-compose.yml` or set them in your environment:
+2. Configure application settings as environment variables, in
+   `docker-compose.yml` or your shell:
 ```yaml
 environment:
-  - CONSUMER_CONFIG_FILE=/app/arguments.env
-  - PRODUCER_CONFIG_FILE=/app/arguments.env
+  - CONSUMER_CONFIG_FILE=/app/client.properties
   - INPUT_TOPIC=your-input-topic
   - GROUP_ID=your-group-id
   - RUN_INTERVAL=120
@@ -100,19 +121,25 @@ docker-compose logs -f
 docker-compose down
 ```
 
+The container handles `SIGTERM`, so stopping it ends the current window and
+writes out whatever it measured rather than discarding the run. `docker-compose.yml`
+allows 30 seconds for that.
+
+The profiler measures one window and exits, so `restart` is `on-failure`: a
+completed run stops the container, and only a genuine crash is retried.
+
 ### Running Locally
 
 1. Set up the environment variables:
 ```bash
-export CONSUMER_CONFIG_FILE=arguments.env
-export PRODUCER_CONFIG_FILE=arguments.env
+export CONSUMER_CONFIG_FILE=client.properties
 export INPUT_TOPIC=your-input-topic
 export GROUP_ID=your-group-id
 export RUN_INTERVAL=120
 export T1=IngestionTime
 export T2=consumerWallClockTime
 export CONSUMER_OUTPUT=localFileDump
-export RESULT_DUMP_LOCAL_FILEPATH=/app/data/latency_results.csv
+export RESULT_DUMP_LOCAL_FILEPATH=latency_results.csv
 export VALUE_DESERIALIZER=StringDeserializer
 export KEY_DESERIALIZER=StringDeserializer
 export DATE_TIME_FORMAT=epoch
@@ -222,9 +249,18 @@ warning and is otherwise ignored.
 
 ## Logging
 
-- Logs are written to the `logs` directory
-- Log level can be configured in `main.py`
-- Docker logs can be viewed using `docker-compose logs -f`
+- Logs go to stdout/stderr, which is where a container's logs belong. (An
+  earlier version of this README claimed a `logs/` directory; nothing ever
+  wrote to it.)
+- Log level is configured in `main.py`
+- Docker logs can be viewed with `docker-compose logs -f`
+
+Each run reports how many messages it measured, how many it skipped and why,
+which message timestamp type it observed, and how many latencies came out
+negative, before it reports any percentiles.
+
+The process exits non-zero if the run failed, so `restart: on-failure` and CI
+can tell a failed run from a completed one.
 
 ## Contributing
 

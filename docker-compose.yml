@@ -1,25 +1,33 @@
-version: '3.8'
-
+# No `version:` key -- it has been obsolete since Compose v2 and only produces
+# a warning.
 services:
   kafka-latency-profiler:
     build: .
     volumes:
       - ./data:/app/data
-      - ./logs:/app/logs
-      - ./arguments.env:/app/arguments.env
+      # Kafka connection settings: bootstrap.servers, SASL, Schema Registry.
+      # This file holds real credentials and is gitignored; arguments.env is a
+      # tracked template for the application settings below. They are different
+      # formats and must not be the same file.
+      - ./client.properties:/app/client.properties:ro
     environment:
-      - CONSUMER_CONFIG_FILE=/app/arguments.env
-      - PRODUCER_CONFIG_FILE=/app/arguments.env
+      - CONSUMER_CONFIG_FILE=/app/client.properties
       - INPUT_TOPIC=your-input-topic
       - GROUP_ID=your-group-id
       - RUN_INTERVAL=120
       - T1=IngestionTime
       - T2=consumerWallClockTime
+      - T1_UNIT=ms
+      - T1_TIMEZONE=utc
       - CONSUMER_OUTPUT=localFileDump
       - RESULT_DUMP_LOCAL_FILEPATH=/app/data/latency_results.csv
       - VALUE_DESERIALIZER=StringDeserializer
       - KEY_DESERIALIZER=StringDeserializer
       - DATE_TIME_FORMAT=epoch
-      - T1_UNIT=ms
-      - T1_TIMEZONE=utc
-    restart: unless-stopped
+    # The profiler measures one window and exits. `unless-stopped` restarted it
+    # forever, and each run used to overwrite the last one's results.
+    # `on-failure` retries a genuine crash and nothing else.
+    restart: on-failure
+    # Long enough for the current window to finish and the results to be
+    # written when the container is asked to stop.
+    stop_grace_period: 30s

@@ -1,0 +1,23 @@
+# Kafka client settings, in java properties format. Copy to client.properties
+# (gitignored) and fill in. These are passed straight to librdkafka, so any
+# librdkafka property is valid here.
+#
+# Do NOT put application settings (INPUT_TOPIC, T1, ...) in this file: they are
+# environment variables, and librdkafka rejects them as unknown properties.
+bootstrap.servers=your-broker:9092
+security.protocol=SASL_SSL
+sasl.mechanisms=PLAIN
+sasl.username=your-key
+sasl.password=your-secret
+
+# Consumer group. GROUP_ID in the environment overrides this if both are set.
+group.id=kafka-latency-profiler
+
+# Start at the end of the topic: a profiler measuring current latency should
+# not first chew through the backlog.
+auto.offset.reset=latest
+
+# Only needed for AvroDeserializer / JSONSchemaDeserializer.
+#schema.registry.url=https://your-schema-registry
+#basic.auth.credentials.source=USER_INFO
+#basic.auth.user.info=sr-key:sr-secret

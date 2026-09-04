@@ -1,36 +1,41 @@
-FROM python:3.9-slim
+# Bookworm is pinned explicitly so a rebuild does not silently move to a new
+# Debian release. Pin the digest too if you need byte-identical rebuilds.
+FROM python:3.13-slim-bookworm
+
+# Unbuffered so `docker logs` shows output as it happens rather than at exit.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first to leverage Docker cache
+# confluent-kafka ships manylinux wheels, so no compiler is needed. The old
+# image installed gcc and kept it in the final layer.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create necessary directories
-RUN mkdir -p /app/data /app/logs
+# Copy only what runs. `COPY . .` baked arguments.env -- the file the README
+# tells you to put sasl.password in -- straight into the image.
+COPY main.py ./
+COPY src ./src
 
-# Copy the entire project
-COPY . .
+RUN useradd --create-home --uid 10001 profiler \
+    && mkdir -p /app/data \
+    && chown -R profiler:profiler /app/data
+USER profiler
 
-# Set environment variables
-ENV PYTHONPATH=/app
+# Real defaults only. PRODUCER_CONFIG_FILE and RESULT_DUMP_LOCAL_FILEPATH are
+# deliberately left unset: they used to default to the string 'None', which is
+# truthy, so the validation meant to catch a missing value never fired.
+ENV RUN_INTERVAL=120 \
+    T1=IngestionTime \
+    T2=consumerWallClockTime \
+    T1_UNIT=ms \
+    T1_TIMEZONE=utc \
+    VALUE_DESERIALIZER=StringDeserializer \
+    KEY_DESERIALIZER=StringDeserializer \
+    DATE_TIME_FORMAT=epoch
 
-# Run the application
+# ENV before CMD: the old file put them after, which reads as though they apply
+# to the command rather than the image.
 CMD ["python", "main.py"]
-
-ENV RUN_INTERVAL=120
-ENV T1='IngestionTime'
-ENV T2='consumerWallClockTime'
-ENV VALUE_DESERIALIZER='StringDeserializer'
-ENV KEY_DESERIALIZER='StringDeserializer'
-ENV DATE_TIME_FORMAT='epoch'
-ENV PRODUCER_CONFIG_FILE='None'
-ENV RESULT_DUMP_LOCAL_FILEPATH='None'
-
-
-
