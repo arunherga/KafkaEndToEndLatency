@@ -12,12 +12,11 @@ services:
       - PRODUCER_CONFIG_FILE=/app/arguments.env
       - INPUT_TOPIC=your-input-topic
       - GROUP_ID=your-group-id
-      - ENABLE_SAMPLING=True
       - RUN_INTERVAL=120
       - T1=IngestionTime
       - T2=consumerWallClockTime
       - CONSUMER_OUTPUT=localFileDump
-      - RESULT_DUMP_LOCAL_FILEPATH=latency_results.csv
+      - RESULT_DUMP_LOCAL_FILEPATH=/app/data/latency_results.csv
       - VALUE_DESERIALIZER=StringDeserializer
       - KEY_DESERIALIZER=StringDeserializer
       - DATE_TIME_FORMAT=epoch

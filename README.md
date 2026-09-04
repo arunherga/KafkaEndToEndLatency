@@ -69,12 +69,11 @@ environment:
   - PRODUCER_CONFIG_FILE=/app/arguments.env
   - INPUT_TOPIC=your-input-topic
   - GROUP_ID=your-group-id
-  - ENABLE_SAMPLING=True
   - RUN_INTERVAL=120
   - T1=IngestionTime
   - T2=consumerWallClockTime
   - CONSUMER_OUTPUT=localFileDump
-  - RESULT_DUMP_LOCAL_FILEPATH=latency_results.csv
+  - RESULT_DUMP_LOCAL_FILEPATH=/app/data/latency_results.csv
   - VALUE_DESERIALIZER=StringDeserializer
   - KEY_DESERIALIZER=StringDeserializer
   - DATE_TIME_FORMAT=epoch
@@ -109,12 +108,11 @@ export CONSUMER_CONFIG_FILE=arguments.env
 export PRODUCER_CONFIG_FILE=arguments.env
 export INPUT_TOPIC=your-input-topic
 export GROUP_ID=your-group-id
-export ENABLE_SAMPLING=True
 export RUN_INTERVAL=120
 export T1=IngestionTime
 export T2=consumerWallClockTime
 export CONSUMER_OUTPUT=localFileDump
-export RESULT_DUMP_LOCAL_FILEPATH=latency_results.csv
+export RESULT_DUMP_LOCAL_FILEPATH=/app/data/latency_results.csv
 export VALUE_DESERIALIZER=StringDeserializer
 export KEY_DESERIALIZER=StringDeserializer
 export DATE_TIME_FORMAT=epoch
@@ -184,17 +182,43 @@ key as well as the value (`key.produced_at`).
 
 ## Output
 
-The profiler can output results in two ways:
+Every run emits **one row per partition plus an `all` aggregate row**, with these
+columns:
 
-1. **Kafka Topic** (`CONSUMER_OUTPUT=dumpToTopic`):
-   - Results are published to the specified output topic
-   - Uses Avro serialization
-   - Includes average latency and percentiles
+| Column | Meaning |
+|---|---|
+| `date_time` | When the run finished (UTC) |
+| `topic`, `group_id`, `partition` | What was measured; `partition=all` is the aggregate |
+| `count` | Latencies measured |
+| `skipped` | Messages read but not measurable (see the run's diagnostics) |
+| `negative_latencies` | Measured below zero, i.e. clock skew |
+| `window_seconds` | Actual length of the run |
+| `min_ms`, `mean_ms`, `max_ms`, `stddev_ms` | Exact, not estimated |
+| `p50_ms`, `p90_ms`, `p95_ms`, `p99_ms`, `p999_ms` | From the histogram, within ~0.1% |
 
-2. **Local File** (`CONSUMER_OUTPUT=localFileDump`):
-   - Results are written to a CSV file
-   - File is stored in the `data` directory
-   - Includes average latency and percentiles
+A per-partition breakdown is usually the useful diagnostic: one slow broker is
+invisible in a single topic-wide p99.
+
+1. **Kafka Topic** (`CONSUMER_OUTPUT=dumpToTopic`) publishes one Avro message
+   per row to `OUTPUT_TOPIC`, keyed by topic, group, partition and time.
+2. **Local File** (`CONSUMER_OUTPUT=localFileDump`) **appends** the rows to the
+   CSV at `RESULT_DUMP_LOCAL_FILEPATH`, writing the header only when creating
+   the file. The path is used exactly as given, relative to the working
+   directory.
+
+### Memory and accuracy
+
+Percentiles come from a fixed-memory log-linear histogram (~180 KiB overall,
+~14 KiB per partition) rather than a list of every latency, so a busy topic over
+a long window no longer grows without bound. Percentile values carry a bounded
+relative error of about 0.1% overall and 1.6% per partition, and are never
+reported lower than the real value. Count, min, max, mean and standard deviation
+are tracked exactly.
+
+`ENABLE_SAMPLING` has been removed. It never reduced memory -- it sampled the
+list after it had already been built -- and it applied only to the mean, so the
+mean and the percentiles described different populations. Setting it now logs a
+warning and is otherwise ignored.
 
 ## Logging
 

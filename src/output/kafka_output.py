@@ -1,3 +1,4 @@
+import json
 import logging
 
 from confluent_kafka import Producer
@@ -9,55 +10,63 @@ from src.config.config_manager import KafkaConfig, read_ccloud_config, read_sr_c
 
 logger = logging.getLogger(__name__)
 
-def output_to_kafka(config: KafkaConfig, avg: float, quantiles: list, date_string: str) -> None:
-    """Output results to Kafka topic."""
-    schema_string = """
-    {
-        "namespace": "example.avro",
-        "type": "record",
-        "name": "result",
-        "fields": [
-            {"name": "average", "type": "int"},
-            {"name": "percentile50", "type": "int"},
-            {"name": "percentile90", "type": "int"},
-            {"name": "percentile95", "type": "int"},
-            {"name": "percentile99", "type": "int"},
-            {"name": "percentile999", "type": "int"},
-            {"name": "Date_Time", "type": "string"}
-        ]
-    }
-    """
+# Percentiles are doubles, not ints. As ints they lost sub-millisecond
+# resolution, and an int32 overflowed outright once a unit mismatch inflated a
+# latency past ~24 days -- which is how the old schema turned a measurement bug
+# into a serialization failure.
+RESULT_SCHEMA = json.dumps({
+    "namespace": "kafka.latency.profiler",
+    "type": "record",
+    "name": "LatencyResult",
+    "fields": [
+        {"name": "date_time", "type": "string"},
+        {"name": "topic", "type": "string"},
+        {"name": "group_id", "type": ["null", "string"], "default": None},
+        {"name": "partition", "type": "string"},
+        {"name": "count", "type": "long"},
+        {"name": "skipped", "type": "long"},
+        {"name": "negative_latencies", "type": "long"},
+        {"name": "window_seconds", "type": ["null", "double"], "default": None},
+        {"name": "min_ms", "type": "double"},
+        {"name": "mean_ms", "type": "double"},
+        {"name": "max_ms", "type": "double"},
+        {"name": "stddev_ms", "type": "double"},
+        {"name": "p50_ms", "type": "double"},
+        {"name": "p90_ms", "type": "double"},
+        {"name": "p95_ms", "type": "double"},
+        {"name": "p99_ms", "type": "double"},
+        {"name": "p999_ms", "type": "double"},
+    ],
+})
 
-    result = {
-        "average": int(avg),
-        "percentile50": int(quantiles[0]),
-        "percentile90": int(quantiles[1]),
-        "percentile95": int(quantiles[2]),
-        "percentile99": int(quantiles[3]),
-        "percentile999": int(quantiles[4]),
-        "Date_Time": date_string
-    }
 
+def output_to_kafka(config: KafkaConfig, rows: list) -> None:
+    """Output results to Kafka topic, one message per partition plus an 'all' row."""
     try:
         schema_registry_client = SchemaRegistryClient(read_sr_config(config.producer_config_file))
-        avro_serializer = AvroSerializer(schema_registry_client, schema_string)
+        avro_serializer = AvroSerializer(schema_registry_client, RESULT_SCHEMA)
         string_serializer = StringSerializer('utf_8')
 
         producer = Producer(read_ccloud_config(config.producer_config_file))
-        producer.produce(
-            topic=config.output_topic,
-            key=string_serializer(
-                f"Topic:{config.input_topic},consumer group id:{config.group_id},"
-                f"Date Time:{date_string}"
-            ),
-            value=avro_serializer(result, SerializationContext(config.output_topic, MessageField.VALUE)),
-            on_delivery=delivery_report
-        )
+        for row in rows:
+            key = (
+                f"topic:{row['topic']},group:{row['group_id']},"
+                f"partition:{row['partition']},time:{row['date_time']}"
+            )
+            producer.produce(
+                topic=config.output_topic,
+                key=string_serializer(key),
+                value=avro_serializer(
+                    row, SerializationContext(config.output_topic, MessageField.VALUE)
+                ),
+                on_delivery=delivery_report,
+            )
         producer.flush()
-        logger.info(f"Successfully produced results to topic {config.output_topic}")
+        logger.info(f"Successfully produced {len(rows)} result(s) to topic {config.output_topic}")
     except Exception as e:
         logger.error(f"Error producing to Kafka: {str(e)}")
         raise
+
 
 def delivery_report(err, msg):
     """Callback for message delivery reports."""

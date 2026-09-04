@@ -3,13 +3,13 @@
 import pytest
 
 from src.config.config_manager import KafkaConfig
+from src.core.statistics import LatencyReport
 
 DEFAULT_CONFIG = dict(
     consumer_config_file="client.properties",
     producer_config_file=None,
     input_topic="test-topic",
     group_id="test-group",
-    enable_sampling=False,
     run_interval=120,
     t1="IngestionTime",
     t2="consumerWallClockTime",
@@ -27,11 +27,13 @@ DEFAULT_CONFIG = dict(
 class FakeMessage:
     """Minimal stand-in for confluent_kafka.Message."""
 
-    def __init__(self, value=None, key=None, timestamp_ms=0, timestamp_type=1, error=None):
+    def __init__(self, value=None, key=None, timestamp_ms=0, timestamp_type=1,
+                 error=None, partition=0):
         self._value = value
         self._key = key
         self._timestamp = (timestamp_type, timestamp_ms)
         self._error = error
+        self._partition = partition
 
     def value(self):
         return self._value
@@ -48,13 +50,24 @@ class FakeMessage:
     def topic(self):
         return "test-topic"
 
+    def partition(self):
+        return self._partition
+
 
 class FakeProcessor:
-    """Stands in for MessageProcessor when only the results matter."""
+    """Stands in for MessageProcessor when only the results matter.
 
-    def __init__(self, latencies):
-        self.latency_array = list(latencies)
-        self.count = len(self.latency_array)
+    Carries a real LatencyReport so the reporting path is exercised for real.
+    """
+
+    def __init__(self, latencies, partition=0):
+        latencies = list(latencies)
+        self.stats = LatencyReport()
+        for latency in latencies:
+            self.stats.record(latency, partition)
+        self.count = len(latencies)
+        self.negative_latencies = 0
+        self.skipped_total = 0
         self.diagnostics_logged = False
 
     def log_diagnostics(self):
@@ -65,9 +78,8 @@ class FakeProcessor:
 def make_config(tmp_path):
     """A valid config whose output path is always inside the test's tmp dir.
 
-    Tests that reach the file output must not write anywhere else: a relative
-    path lands in the repository, and at this commit file_output still joins
-    onto /app/data, which is a PermissionError on Linux.
+    Tests that reach the file output must not write anywhere else -- a relative
+    path would land in the repository.
     """
     def _make(**overrides):
         defaults = {**DEFAULT_CONFIG, 'local_filepath': str(tmp_path / "out.csv")}
