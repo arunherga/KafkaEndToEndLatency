@@ -55,6 +55,16 @@ jobs:
       - name: Run tests
         run: pytest
 
+      - name: Protobuf support is optional, so its suite must skip here
+        run: |
+          output=$(pytest tests/test_protobuf.py -q -rs 2>&1) || true
+          echo "$output"
+          if ! echo "$output" | grep -qi "skipped"; then
+            echo "Expected the protobuf suite to skip without the optional extras."
+            echo "If it ran, something on the default path now pulls protobuf in."
+            exit 1
+          fi
+
   docker:
     name: docker build
     runs-on: ubuntu-latest
@@ -90,3 +100,33 @@ jobs:
           echo "$output"
           test "$status" = "1" || { echo "expected exit 1 on missing config, got $status"; exit 1; }
           echo "$output" | grep -q "CONSUMER_CONFIG_FILE is required"
+
+  test-protobuf:
+    name: pytest (protobuf extra)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-protobuf.txt
+
+      - name: Install dependencies, including the protobuf extra
+        run: pip install -r requirements-dev.txt -r requirements-protobuf.txt
+
+      - name: The protobuf suite must actually run here, not skip
+        run: |
+          output=$(pytest tests/test_protobuf.py -q -rs 2>&1) || { echo "$output"; exit 1; }
+          echo "$output"
+          if echo "$output" | grep -qi "skipped"; then
+            echo "The protobuf suite skipped even with the extras installed."
+            exit 1
+          fi
+
+      - name: Full suite with the extra installed
+        run: pytest

@@ -28,7 +28,7 @@ CSV.
 - Measures latency between any two timestamps on a message
 - Reads timestamps from the broker, the message value, or the message key,
   including nested fields
-- Supports Avro, JSON Schema, JSON and String deserializers
+- Supports Avro, JSON Schema, Protobuf, JSON and String deserializers
 - Reports a per-partition breakdown alongside topic-wide figures
 - Uses fixed-memory percentiles, so a busy topic cannot exhaust the heap
 - Writes results to a Kafka topic or a local CSV
@@ -139,8 +139,9 @@ All application settings are environment variables.
 | `DATE_TIME_FORMAT` | Yes | `epoch` † | `epoch`, or a `strptime` pattern such as `%Y-%m-%d %H:%M:%S` |
 | `T1_UNIT` | No | `ms` | Unit of a numeric `T1` field: `s`, `ms`, `us` or `ns`. Applies when `DATE_TIME_FORMAT=epoch` |
 | `T1_TIMEZONE` | No | `utc` | How to read a parsed timestamp with no timezone: `utc` or `local` |
-| `VALUE_DESERIALIZER` | Yes | `StringDeserializer` † | `AvroDeserializer`, `JSONSchemaDeserializer`, `JSONDeserializer` or `StringDeserializer` |
+| `VALUE_DESERIALIZER` | Yes | `StringDeserializer` † | `AvroDeserializer`, `JSONSchemaDeserializer`, `ProtobufDeserializer`, `JSONDeserializer` or `StringDeserializer` |
 | `KEY_DESERIALIZER` | Yes | `StringDeserializer` † | Same values. Only used when `T1` reads from the key |
+| `PROTOBUF_MESSAGE_NAME` | No | — | Fully-qualified message to decode when a `.proto` declares more than one. Defaults to the first message in the schema |
 | `CONSUMER_OUTPUT` | Yes | — | `localFileDump` or `dumpToTopic` |
 | `RESULT_DUMP_LOCAL_FILEPATH` | If `localFileDump` | — | CSV path, used exactly as given, relative to the working directory |
 | `OUTPUT_TOPIC` | If `dumpToTopic` | — | Topic to publish results to |
@@ -150,6 +151,39 @@ All application settings are environment variables.
 
 `ENABLE_SAMPLING` is no longer supported. Setting it logs a warning and is otherwise
 ignored; see [Memory and Accuracy](#memory-and-accuracy).
+
+`ProtobufDeserializer` needs an optional install; see
+[Protobuf Support](#protobuf-support).
+
+### Protobuf Support
+
+The `.proto` schema is fetched from Schema Registry, exactly as for Avro and JSON
+Schema, and compiled at runtime. **No pre-generated `_pb2.py` files are needed.**
+Schemas that import the well-known types (`google.protobuf.Timestamp` and friends)
+or other registered subjects are resolved automatically.
+
+This needs packages the rest of the tool does not — `grpcio-tools` pulls in `grpcio`,
+roughly 19 MiB — so they are an optional install:
+
+```bash
+pip install -r requirements-protobuf.txt
+```
+
+For Docker, opt in at build time:
+
+```bash
+docker build --build-arg INSTALL_PROTOBUF=true .
+```
+
+or set `INSTALL_PROTOBUF: "true"` under `build.args` in `docker-compose.yml`.
+
+Everything protobuf-specific is imported lazily, so the tool runs normally without
+these packages installed and only complains — with the install command — if a
+protobuf deserializer is actually configured.
+
+One thing to know when choosing `T1`: protobuf's JSON mapping renders 64-bit integers
+as **strings**, so an `int64 produced_at` field arrives as `"1788409800000"`. The
+epoch conversion accepts that, so `T1=value.produced_at` works unchanged.
 
 ## Usage
 
@@ -258,6 +292,7 @@ KafkaEndToEndLatency/
 ├── main.py                   # Application entry point
 ├── requirements.txt          # Runtime dependency
 ├── requirements-dev.txt      # Test and lint tooling
+├── requirements-protobuf.txt # Optional protobuf support
 ├── pyproject.toml            # ruff and pytest configuration
 ├── Dockerfile                # Docker configuration
 ├── docker-compose.yml        # Docker Compose configuration
@@ -276,6 +311,16 @@ ruff check .
 The suite runs entirely against fakes; no broker or Schema Registry is needed. Both
 commands run on every pull request via GitHub Actions, along with a Docker image
 build.
+
+The protobuf tests are skipped unless the optional packages are installed:
+
+```bash
+pip install -r requirements-protobuf.txt
+pytest tests/test_protobuf.py
+```
+
+CI runs the suite both ways, and fails if the protobuf tests run on the default path
+— which would mean something had stopped being optional.
 
 ## Contributing
 

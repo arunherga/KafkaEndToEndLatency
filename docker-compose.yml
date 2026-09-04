@@ -2,7 +2,12 @@
 # a warning.
 services:
   kafka-latency-profiler:
-    build: .
+    build:
+      context: .
+      args:
+        # Set to "true" for VALUE_DESERIALIZER=ProtobufDeserializer. It adds
+        # roughly 19 MiB to the image, so it is off by default.
+        INSTALL_PROTOBUF: "false"
     volumes:
       - ./data:/app/data
       # Kafka connection settings: bootstrap.servers, SASL, Schema Registry.

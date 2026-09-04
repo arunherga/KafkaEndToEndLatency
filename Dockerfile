@@ -11,8 +11,14 @@ WORKDIR /app
 
 # confluent-kafka ships manylinux wheels, so no compiler is needed. The old
 # image installed gcc and kept it in the final layer.
-COPY requirements.txt .
+COPY requirements.txt requirements-protobuf.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Protobuf support needs grpcio-tools, which pulls in grpcio -- roughly 19 MiB
+# that most users do not need. Opt in at build time:
+#   docker build --build-arg INSTALL_PROTOBUF=true .
+ARG INSTALL_PROTOBUF=false
+RUN if [ "$INSTALL_PROTOBUF" = "true" ]; then pip install --no-cache-dir -r requirements-protobuf.txt; fi
 
 # Copy only what runs. `COPY . .` baked arguments.env -- the file the README
 # tells you to put sasl.password in -- straight into the image.

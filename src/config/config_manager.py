@@ -12,6 +12,7 @@ VALID_DESERIALIZERS = [
     'JSONDeserializer',
     'StringDeserializer',
     'JSONSchemaDeserializer',
+    'ProtobufDeserializer',
 ]
 
 VALID_OUTPUT_TYPES = ['dumpToTopic', 'localFileDump']
@@ -45,6 +46,10 @@ class KafkaConfig:
     value_deserializer: str
     key_deserializer: str
     date_time_format: str
+    # Fully-qualified message to decode when a .proto declares more than one.
+    # Without it the first message in the schema is used, which is what
+    # Confluent's default message index refers to.
+    protobuf_message_name: Optional[str] = None
     # Unit of a numeric T1 field. Only meaningful when DATE_TIME_FORMAT=epoch,
     # where the raw value carries no unit of its own.
     t1_unit: str = 'ms'
@@ -62,14 +67,14 @@ def validate_config(config: KafkaConfig) -> None:
 
     if config.value_deserializer not in VALID_DESERIALIZERS:
         raise ValueError(
-            'Invalid input for VALUE_DESERIALIZER must be among '
-            'AvroDeserializer,JSONDeserializer,StringDeserializer,JSONSchemaDeserializer'
+            f'Invalid input for VALUE_DESERIALIZER must be among '
+            f'{", ".join(VALID_DESERIALIZERS)}'
         )
 
     if config.key_deserializer not in VALID_DESERIALIZERS:
         raise ValueError(
-            'Invalid input for KEY_DESERIALIZER must be among '
-            'AvroDeserializer,JSONDeserializer,StringDeserializer,JSONSchemaDeserializer'
+            f'Invalid input for KEY_DESERIALIZER must be among '
+            f'{", ".join(VALID_DESERIALIZERS)}'
         )
 
     try:
@@ -133,6 +138,7 @@ def create_kafka_config() -> KafkaConfig:
         value_deserializer=os.getenv("VALUE_DESERIALIZER"),
         key_deserializer=os.getenv("KEY_DESERIALIZER"),
         date_time_format=os.getenv("DATE_TIME_FORMAT"),
+        protobuf_message_name=os.getenv("PROTOBUF_MESSAGE_NAME"),
         t1_unit=os.getenv("T1_UNIT", "ms").lower(),
         t1_timezone=os.getenv("T1_TIMEZONE", "utc").lower(),
     )
