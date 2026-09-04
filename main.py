@@ -23,8 +23,10 @@ def process_results(processor: MessageProcessor, config) -> None:
     n = datetime.now()
     date_string = n.strftime("%Y-%m-%d %H:%M:%S.%f")
 
-    logger.info(f"Total Message read by consumer: {processor.count}")
     logger.info(f"Current Time: {date_string}")
+    # Report coverage and clock-skew diagnostics before any numbers, including
+    # on an empty run -- that is exactly when they explain what went wrong.
+    processor.log_diagnostics()
 
     if processor.count == 0:
         logger.warning(

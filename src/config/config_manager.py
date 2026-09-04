@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from src.core.timestamps import EPOCH_UNITS, TIMEZONES, TimestampError, split_timestamp_spec
+
 logger = logging.getLogger(__name__)
 
 VALID_DESERIALIZERS = [
@@ -11,6 +13,22 @@ VALID_DESERIALIZERS = [
     'StringDeserializer',
     'JSONSchemaDeserializer',
 ]
+
+VALID_OUTPUT_TYPES = ['dumpToTopic', 'localFileDump']
+
+VALID_T2 = ['IngestionTime', 'consumerWallClockTime']
+
+# Settings with no usable default -- a run cannot be interpreted without them.
+REQUIRED_SETTINGS = {
+    'consumer_config_file': 'CONSUMER_CONFIG_FILE',
+    'input_topic': 'INPUT_TOPIC',
+    't1': 'T1',
+    't2': 'T2',
+    'output_type': 'CONSUMER_OUTPUT',
+    'value_deserializer': 'VALUE_DESERIALIZER',
+    'key_deserializer': 'KEY_DESERIALIZER',
+    'date_time_format': 'DATE_TIME_FORMAT',
+}
 
 @dataclass
 class KafkaConfig:
@@ -28,9 +46,21 @@ class KafkaConfig:
     value_deserializer: str
     key_deserializer: str
     date_time_format: str
+    # Unit of a numeric T1 field. Only meaningful when DATE_TIME_FORMAT=epoch,
+    # where the raw value carries no unit of its own.
+    t1_unit: str = 'ms'
+    # How to interpret a parsed timestamp that carries no zone of its own.
+    t1_timezone: str = 'utc'
 
 def validate_config(config: KafkaConfig) -> None:
     """Validate the configuration parameters."""
+    for attribute, env_var in REQUIRED_SETTINGS.items():
+        if not getattr(config, attribute):
+            raise ValueError(f"{env_var} is required but was not set")
+
+    if config.run_interval <= 0:
+        raise ValueError(f"RUN_INTERVAL must be a positive number of seconds, got {config.run_interval}")
+
     if config.value_deserializer not in VALID_DESERIALIZERS:
         raise ValueError(
             'Invalid input for VALUE_DESERIALIZER must be among '
@@ -43,14 +73,27 @@ def validate_config(config: KafkaConfig) -> None:
             'AvroDeserializer,JSONDeserializer,StringDeserializer,JSONSchemaDeserializer'
         )
 
-    if config.t1 != "IngestionTime" and not (config.t1.startswith('key.') or config.t1.startswith('value.')):
-        raise ValueError('Invalid input for T1 must be among IngestionTime or value.column name or key.column name')
+    try:
+        split_timestamp_spec(config.t1)
+    except TimestampError as e:
+        raise ValueError(f"Invalid input for T1: {e}") from e
 
-    if config.t2 not in ['IngestionTime', 'consumerWallClockTime']:
+    if config.t2 not in VALID_T2:
         raise ValueError("Invalid input for T2 must be one of IngestionTime, consumerWallClockTime")
 
     if config.t1 == config.t2 == 'IngestionTime':
         raise ValueError("Both T1 and T2 cannot be IngestionTime")
+
+    if config.t1_unit not in EPOCH_UNITS:
+        raise ValueError(f"Invalid input for T1_UNIT must be one of {', '.join(sorted(EPOCH_UNITS))}")
+
+    if config.t1_timezone not in TIMEZONES:
+        raise ValueError(f"Invalid input for T1_TIMEZONE must be one of {', '.join(TIMEZONES)}")
+
+    if config.output_type not in VALID_OUTPUT_TYPES:
+        raise ValueError(
+            f"Invalid input for CONSUMER_OUTPUT must be one of {', '.join(VALID_OUTPUT_TYPES)}"
+        )
 
     if config.output_type == 'dumpToTopic':
         if not config.producer_config_file:
@@ -83,21 +126,28 @@ def create_kafka_config() -> KafkaConfig:
         output_topic=os.getenv("OUTPUT_TOPIC"),
         value_deserializer=os.getenv("VALUE_DESERIALIZER"),
         key_deserializer=os.getenv("KEY_DESERIALIZER"),
-        date_time_format=os.getenv("DATE_TIME_FORMAT")
+        date_time_format=os.getenv("DATE_TIME_FORMAT"),
+        t1_unit=os.getenv("T1_UNIT", "ms").lower(),
+        t1_timezone=os.getenv("T1_TIMEZONE", "utc").lower(),
     )
     validate_config(config)
     return config
 
+def _read_properties(config_file: str) -> dict:
+    """Read a java-style properties file into a dict."""
+    conf = {}
+    with open(config_file) as fh:
+        for line in fh:
+            line = line.strip()
+            if len(line) != 0 and line[0] != "#":
+                parameter, value = line.strip().split('=', 1)
+                conf[parameter] = value.strip()
+    return conf
+
 def read_ccloud_config(config_file: str) -> dict:
     """Read and parse Kafka configuration file."""
-    conf = {}
     try:
-        with open(config_file) as fh:
-            for line in fh:
-                line = line.strip()
-                if len(line) != 0 and line[0] != "#":
-                    parameter, value = line.strip().split('=', 1)
-                    conf[parameter] = value.strip()
+        conf = _read_properties(config_file)
         conf.pop('schema.registry.url', None)
         conf.pop('basic.auth.user.info', None)
         conf.pop('basic.auth.credentials.source', None)
@@ -108,18 +158,18 @@ def read_ccloud_config(config_file: str) -> dict:
 
 def read_sr_config(config_file: str) -> dict:
     """Read and parse Schema Registry configuration."""
-    conf = {}
     try:
-        with open(config_file) as fh:
-            for line in fh:
-                line = line.strip()
-                if len(line) != 0 and line[0] != "#":
-                    parameter, value = line.strip().split('=', 1)
-                    conf[parameter] = value.strip()
-        return {
-            'url': conf['schema.registry.url'],
-            'basic.auth.user.info': conf['basic.auth.user.info']
-        }
+        conf = _read_properties(config_file)
+        if 'schema.registry.url' not in conf:
+            raise ValueError(
+                f"schema.registry.url is required in {config_file} when using an "
+                "Avro or JSON Schema deserializer"
+            )
+        sr_config = {'url': conf['schema.registry.url']}
+        # Optional: a Schema Registry without authentication is normal locally.
+        if 'basic.auth.user.info' in conf:
+            sr_config['basic.auth.user.info'] = conf['basic.auth.user.info']
+        return sr_config
     except Exception as e:
         logger.error(f"Error reading schema registry config file {config_file}: {str(e)}")
         raise
